@@ -94,7 +94,7 @@ public:
             // the dereference change expected by blowUpActiveAggregate.
             TList<TIntermBinary*> derefs;
             blowUpActiveAggregate(base.getType(), base.getName(), derefs, derefs.end(), -1, -1, 0, 0,
-                                  base.getQualifier().storage, true);
+                                  base.getQualifier().storage, true, -1);
         }
     }
 
@@ -167,6 +167,19 @@ public:
         }
     }
 
+    int getArraySize(const TType& type)
+    {
+        int res = -1;
+        if (type.isUnsizedArray()) {
+            res = 0;
+        } else if (type.isSizedArray()) {
+            res = type.getOuterArraySize();
+        } else {
+            res = 1;
+        }
+        return res;
+    }
+
     // Calculate the stride of an array type
     int getArrayStride(const TType& baseType, const TType& type)
     {
@@ -226,7 +239,7 @@ public:
     // A value of 0 for arraySize will mean to use the full array's size.
     void blowUpActiveAggregate(const TType& baseType, const TString& baseName, const TList<TIntermBinary*>& derefs,
                                TList<TIntermBinary*>::const_iterator deref, int offset, int blockIndex, int arraySize,
-                               int topLevelArrayStride, TStorageQualifier baseStorage, bool active)
+                               int topLevelArrayStride, TStorageQualifier baseStorage, bool active, int topLevelArraySize)
     {
         // when strictArraySuffix is enabled, we closely follow the rules from ARB_program_interface_query.
         // Broadly:
@@ -261,8 +274,11 @@ public:
                         newBaseName.append(TString("[") + String(i) + "]");
                     TList<TIntermBinary*>::const_iterator nextDeref = deref;
                     ++nextDeref;
+                    if (topLevelArraySize == -1) {
+                        topLevelArraySize = getArraySize(baseType);
+                    }
                     blowUpActiveAggregate(*terminalType, newBaseName, derefs, nextDeref, offset, blockIndex, arraySize,
-                                          topLevelArrayStride, baseStorage, active);
+                                          topLevelArrayStride, baseStorage, active, topLevelArraySize);
 
                     if (offset >= 0)
                         offset += stride;
@@ -282,6 +298,10 @@ public:
 
                     if (offset >= 0)
                         offset += stride * index;
+                }
+
+                if (topLevelArraySize == -1) {
+                    topLevelArraySize = getArraySize(visitNode->getLeft()->getType());
                 }
 
                 if (topLevelArrayStride == 0)
@@ -333,7 +353,7 @@ public:
                         offset = baseOffset + stride * i;
 
                     blowUpActiveAggregate(derefType, newBaseName, derefs, derefs.end(), offset, blockIndex, 0,
-                                          topLevelArrayStride, baseStorage, active);
+                                          topLevelArrayStride, baseStorage, active, topLevelArraySize);
                 }
             } else {
                 // Visit all members of this aggregate, and for each one,
@@ -362,8 +382,12 @@ public:
                         arrayStride = getArrayStride(baseType, derefType);
                     }
 
+                    if (topLevelArraySize == -1) {
+                        topLevelArraySize = getArraySize(derefType);
+                    }
+
                     blowUpActiveAggregate(derefType, newBaseName, derefs, derefs.end(), offset, blockIndex, 0,
-                                          arrayStride, baseStorage, active);
+                                          arrayStride, baseStorage, active, topLevelArraySize);
                 }
             }
 
@@ -399,6 +423,7 @@ public:
             if ((reflection.options & EShReflectionSeparateBuffers) && terminalType->getBasicType() == EbtAtomicUint)
                 reflection.atomicCounterUniformIndices.push_back(uniformIndex);
 
+            variables.back().topLevelArraySize = topLevelArraySize;
             variables.back().topLevelArrayStride = topLevelArrayStride;
             
             if ((reflection.options & EShReflectionAllBlockVariables) && active) {
@@ -470,6 +495,8 @@ public:
             reflection.nameToIndex[namespacedName] = (int)ioItems.size();
             ioItems.push_back(
                 TObjectReflection(name.c_str(), type, 0, mapToGlType(type), mapToGlArraySize(type), 0));
+
+            ioItems.back().topLevelArraySize = -1;
 
             EShLanguageMask& stages = ioItems.back().stages;
             stages = static_cast<EShLanguageMask>(stages | 1 << intermediate.getStage());
@@ -574,17 +601,17 @@ public:
                             name.append("[0]");
                             blowUpActiveAggregate(TType(derefType, 0), name, derefs, derefs.end(), memberOffsets[i],
                                                   blockIndex, 0, getArrayStride(base->getType(), derefType),
-                                                  base->getQualifier().storage, false);
+                                                  base->getQualifier().storage, false, getArraySize(derefType));
                         } else {
                             blowUpActiveAggregate(derefType, name, derefs, derefs.end(), memberOffsets[i], blockIndex,
-                                                  0, 0, base->getQualifier().storage, false);
+                                                  0, 0, base->getQualifier().storage, false, -1);
                         }
                     }
                 } else {
                     // otherwise - if we're not using strict array suffix rules, or this isn't a block so we are
                     // expanding root arrays anyway, just start the iteration from the base block type.
                     blowUpActiveAggregate(base->getType(), baseName, derefs, derefs.end(), 0, blockIndex, 0, 0,
-                                          base->getQualifier().storage, false);
+                                          base->getQualifier().storage, false, -1);
                 }
             }
         }
@@ -617,7 +644,7 @@ public:
                 baseName = base->getName();
         }
         blowUpActiveAggregate(base->getType(), baseName, derefs, derefs.begin(), offset, blockIndex, arraySize, 0,
-                              base->getQualifier().storage, true);
+                              base->getQualifier().storage, true, -1);
     }
 
     int addBlockName(const TString& name, const TType& type, int size)

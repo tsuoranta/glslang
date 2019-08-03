@@ -633,6 +633,7 @@ public:
     int counterIndex;
     int numMembers;
     int arrayStride;            // stride of an array variable
+    int topLevelArraySize;      // size of the top-level variable in a storage buffer member
     int topLevelArrayStride;    // stride of the top-level variable in a storage buffer member
     EShLanguageMask stages;
 
