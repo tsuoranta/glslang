@@ -40,6 +40,27 @@
 
 #include "gl_types.h"
 
+#if 0
+#define LOG(...) print_indent(); print(__VA_ARGS__)
+#else
+#define LOG(...)
+#endif
+
+class ScopeIndent {
+public:
+    ScopeIndent() { ++level; }
+    ~ScopeIndent() { --level; }
+    static int level;
+};
+
+int ScopeIndent::level = 0;
+
+void print_indent() {
+    for (int i = 0; i < 4 * ScopeIndent::level; ++i) {
+        fputc(' ', stdout);
+    }
+}
+
 //
 // Grow the reflection database through a friend traverser class of TReflection and a
 // collection of functions to do a liveness traversal that note what uniforms are used
@@ -93,6 +114,8 @@ public:
             // Use a degenerate (empty) set of dereferences to immediately put as at the end of
             // the dereference change expected by blowUpActiveAggregate.
             TList<TIntermBinary*> derefs;
+            ScopeIndent scope;
+            LOG("addUniform(node = %s)\n", base.getCompleteString().c_str());
             blowUpActiveAggregate(base.getType(), base.getName(), derefs, derefs.end(), -1, -1, 0, 0,
                                   base.getQualifier().storage, true, -1);
         }
@@ -102,6 +125,9 @@ public:
     {
         if (processedDerefs.find(&base) == processedDerefs.end()) {
             processedDerefs.insert(&base);
+
+            ScopeIndent scope;
+            LOG("addPipeIOVariable(node = %s)\n", base.getCompleteString().c_str());
 
             const TString &name = base.getName();
             const TType &type = base.getType();
@@ -177,6 +203,7 @@ public:
         } else {
             res = 1;
         }
+        LOG("### > topLevelArraySize = %d from %s\n", res, type.getCompleteString().c_str());
         return res;
     }
 
@@ -241,6 +268,9 @@ public:
                                TList<TIntermBinary*>::const_iterator deref, int offset, int blockIndex, int arraySize,
                                int topLevelArrayStride, TStorageQualifier baseStorage, bool active, int topLevelArraySize)
     {
+        ScopeIndent scope;
+        LOG("blowUpActiveAggregate(baseType = %s, baseName = %s, topLevelArrayStride = %d, topLevelArraySize = %d)\n",
+               baseType.getCompleteString().c_str(), baseName.c_str(), topLevelArrayStride, topLevelArraySize);
         // when strictArraySuffix is enabled, we closely follow the rules from ARB_program_interface_query.
         // Broadly:
         // * arrays-of-structs always have a [x] suffix.
@@ -258,6 +288,7 @@ public:
             TIntermBinary* visitNode = *deref;
             terminalType = &visitNode->getType();
             int index;
+            LOG("processing deref %s\n", visitNode->getCompleteString().c_str());
             switch (visitNode->getOp()) {
             case EOpIndexIndirect: {
                 int stride = getArrayStride(baseType, visitNode->getLeft()->getType());
@@ -267,6 +298,8 @@ public:
 
                 // Visit all the indices of this array, and for each one add on the remaining dereferencing
                 for (int i = 0; i < std::max(visitNode->getLeft()->getType().getOuterArraySize(), 1); ++i) {
+                    ScopeIndent scope_inner;
+                    LOG("array index %d\n", i);
                     TString newBaseName = name;
                     if (strictArraySuffix && blockParent)
                         newBaseName.append(TString("[0]"));
@@ -301,6 +334,9 @@ public:
                 }
 
                 if (topLevelArraySize == -1) {
+                    LOG("(baseType):\n");
+                    topLevelArraySize = getArraySize(baseType);
+                    LOG("(visitNofe left type):\n");
                     topLevelArraySize = getArraySize(visitNode->getLeft()->getType());
                 }
 
@@ -399,6 +435,8 @@ public:
             name.append(TString("[0]"));
         }
 
+        LOG("LEAF %s\n", name.c_str());
+
         // Finally, add a full string to the reflection database, and update the array size if necessary.
         // If the dereferenced entity to record is an array, compute the size and update the maximum size.
 
@@ -410,7 +448,10 @@ public:
 
         TReflection::TNameToIndex::const_iterator it = reflection.nameToIndex.find(name.c_str());
         if (it == reflection.nameToIndex.end()) {
-            int uniformIndex = (int)variables.size();
+            LOG("(new) topLevelArraySize = %d\n", topLevelArraySize);
+            LOG("(baseType) %s\n", baseType.getCompleteString().c_str());
+            LOG("(terminalType) %s\n", terminalType->getCompleteString().c_str());
+                int uniformIndex = (int)variables.size();
             reflection.nameToIndex[name.c_str()] = uniformIndex;
             variables.push_back(TObjectReflection(name.c_str(), *terminalType, offset, mapToGlType(*terminalType),
                                                   arraySize, blockIndex));
@@ -431,6 +472,7 @@ public:
                 stages = static_cast<EShLanguageMask>(stages | 1 << intermediate.getStage());
             }
         } else {
+            LOG("(old)\n");
             if (arraySize > 1) {
                 int& reflectedArraySize = variables[it->second].size;
                 reflectedArraySize = std::max(arraySize, reflectedArraySize);
@@ -448,8 +490,12 @@ public:
     {
         TString name = baseName;
 
+        ScopeIndent scope;
+        LOG("blowUpIOAggregate(baseName = %s, type = %s)\n", baseName.c_str(), type.getCompleteString().c_str());
+
         // if the type is still too coarse a granularity, this is still an aggregate to expand, expand it...
         if (! isReflectionGranularity(type)) {
+
             if (type.isArray()) {
                 // Visit all the indices of this array, and for each one,
                 // fully explode the remaining aggregate to dereference
@@ -523,6 +569,9 @@ public:
     //
     void addDereferencedUniform(TIntermBinary* topNode)
     {
+        ScopeIndent scope;
+        LOG("addDereferencedUniform(topNode = %s)\n", topNode->getCompleteString().c_str());
+
         // See if too fine-grained to process (wait to get further down the tree)
         const TType& leftType = topNode->getLeft()->getType();
         if ((leftType.isVector() || leftType.isMatrix()) && ! leftType.isArray())
@@ -599,10 +648,12 @@ public:
                         // the inner struct type.
                         if (derefType.isArray() && derefType.isStruct()) {
                             name.append("[0]");
+                            LOG("block parent is struct array\n");
                             blowUpActiveAggregate(TType(derefType, 0), name, derefs, derefs.end(), memberOffsets[i],
                                                   blockIndex, 0, getArrayStride(base->getType(), derefType),
                                                   base->getQualifier().storage, false, getArraySize(derefType));
                         } else {
+                            LOG("block parent is not struct array\n");
                             blowUpActiveAggregate(derefType, name, derefs, derefs.end(), memberOffsets[i], blockIndex,
                                                   0, 0, base->getQualifier().storage, false, -1);
                         }
@@ -631,8 +682,10 @@ public:
         // See if we have a specific array size to stick to while enumerating the explosion of the aggregate
         int arraySize = 0;
         if (isReflectionGranularity(topNode->getLeft()->getType()) && topNode->getLeft()->isArray()) {
-            if (topNode->getOp() == EOpIndexDirect)
+            if (topNode->getOp() == EOpIndexDirect) {
                 arraySize = topNode->getRight()->getAsConstantUnion()->getConstArray()[0].getIConst() + 1;
+                LOG("setting arraySize = %d\n", arraySize);
+            }
         }
 
         // Put the dereference chain together, forward
